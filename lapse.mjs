@@ -1679,13 +1679,30 @@ async function patch_kernel(kbase, kmem, p_ucred, restore_info) {
     sysi('setuid', 0);
     log('kernel exploit succeeded!');
     
-    // Store original values for cleanup
+    // Store original values and important addresses for cleanup
     window.kernelCleanupInfo = {
         kbase: kbase,
         kmem: kmem,
         p_ucred: p_ucred,
-        restore_info: restore_info
+        restore_info: restore_info,
+        // Store original syscall table values for proper restoration
+        original_syscall_values: {
+            sysent_661_narg: 0,
+            sysent_661_call: 0,
+            sysent_661_thrcnt: 0
+        }
     };
+    
+    // Store original syscall values before modification
+    try {
+        const offset_sysent_661 = 0x1107f00;
+        const sysent_661 = kbase.add(offset_sysent_661);
+        window.kernelCleanupInfo.original_syscall_values.sysent_661_narg = kmem.read32(sysent_661);
+        window.kernelCleanupInfo.original_syscall_values.sysent_661_call = kmem.read64(sysent_661.add(8));
+        window.kernelCleanupInfo.original_syscall_values.sysent_661_thrcnt = kmem.read32(sysent_661.add(0x2c));
+    } catch(e) {
+        log(`Failed to store original syscall values: ${e.message}`);
+    }
     
     alert("kernel exploit succeeded!");
 }
@@ -1859,7 +1876,7 @@ function setupCleanupHandler() {
     function performFullCleanup() {
         try {
             if (window.kernelCleanupInfo) {
-                const { kmem, p_ucred } = window.kernelCleanupInfo;
+                const { kmem, p_ucred, kbase } = window.kernelCleanupInfo;
                 
                 log('Performing full cleanup before page close...');
                 
@@ -1872,6 +1889,24 @@ function setupCleanupHandler() {
                         log('Reset kernel credentials');
                     } catch(e) {
                         log(`Failed to reset credentials: ${e.message}`);
+                    }
+                    
+                    // Reset syscall table if kbase is available
+                    if (kbase) {
+                        try {
+                            const offset_sysent_661 = 0x1107f00;
+                            const sysent_661 = kbase.add(offset_sysent_661);
+                            const original_values = window.kernelCleanupInfo.original_syscall_values;
+                            
+                            // Restore original syscall table values
+                            kmem.write32(sysent_661, original_values.sysent_661_narg);
+                            kmem.write64(sysent_661.add(8), original_values.sysent_661_call);
+                            kmem.write32(sysent_661.add(0x2c), original_values.sysent_661_thrcnt);
+                            
+                            log('Reset syscall table to original state');
+                        } catch(e) {
+                            log(`Failed to reset syscall table: ${e.message}`);
+                        }
                     }
                 }
             }
@@ -1952,7 +1987,57 @@ kexploit().then(() => {
                 );
                 
                 log('Payload execution initiated successfully');
-                alert("تم تفعيل استغلال الكيرنل والحمولة بنجاح!");
+                
+                // Register a global function to stabilize kernel that can be called from games
+                window.stabilizeKernel = function() {
+                    try {
+                        if (window.kernelCleanupInfo) {
+                            const { kmem, p_ucred, kbase } = window.kernelCleanupInfo;
+                            
+                            log('Performing kernel stabilization...');
+                            
+                            if (kmem && p_ucred) {
+                                // Reset system call table modifications if any were made
+                                if (kbase) {
+                                    try {
+                                        // Reset syscall 661 to original state (if it was modified)
+                                        const offset_sysent_661 = 0x1107f00;
+                                        const sysent_661 = kbase.add(offset_sysent_661);
+                                        
+                                        // Reset syscall table to original values
+                                        const original_values = window.kernelCleanupInfo.original_syscall_values;
+                                        kmem.write32(sysent_661, original_values.sysent_661_narg);
+                                        kmem.write64(sysent_661.add(8), original_values.sysent_661_call);
+                                        kmem.write32(sysent_661.add(0x2c), original_values.sysent_661_thrcnt);
+                                        
+                                        log('Reset syscall table modifications');
+                                    } catch(e) {
+                                        log(`Failed to reset syscall table: ${e.message}`);
+                                    }
+                                }
+                            }
+                            
+                            log('Kernel stabilization complete');
+                            return true;
+                        }
+                        return false;
+                    } catch(e) {
+                        log(`Kernel stabilization error: ${e.message}`);
+                        return false;
+                    }
+                };
+                
+                // Schedule kernel cleanup after payload has had time to execute
+                setTimeout(function() {
+                    window.stabilizeKernel();
+                }, 10000); // Wait 10 seconds after payload execution
+                
+                // Also set up a periodic stabilization check
+                window.kernelStabilizationInterval = setInterval(function() {
+                    window.stabilizeKernel();
+                }, 60000); // Run every minute
+                
+                alert("تم تفعيل استغلال الكيرنل والحمولة بنجاح! عند الخروج من اللعبة، اضغط على زر PS لفتح القائمة الرئيسية أولاً قبل إغلاق اللعبة.");
             } catch (e) {
                 log(`Error in payload execution: ${e.message}`);
                 alert("تم تفعيل استغلال الكيرنل بنجاح، لكن حدث خطأ أثناء تنفيذ الحمولة.");
