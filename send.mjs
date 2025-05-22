@@ -1,4 +1,4 @@
-/* Copyright (C) 2023-2025 anonymous
+/* Copyright (C) 2024-2025 anonymous
 
 This file is part of PSFree.
 
@@ -15,99 +15,93 @@ GNU Affero General Public License for more details.
 You should have received a copy of the GNU Affero General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.  */
 
-// Safe payload sender module for PSFree
+// script for dumping libSceNKWebKit.sprx, libkernel_web.sprx, and
+// libSceLibcInternal.sprx
 
-import { log, die } from './module/utils.mjs';
+// This script is for firmware 8.0x. You need to port this to your firmware if
+// you want to use it. It only dumps the .text and PT_SCE_RELRO segments. It
+// doesn't dump the entire ELF file.
+//
+// There's also some miscellaneous functions to dump functions from WebKit that
+// were studied during the development of PSFree.
 
-// Maximum payload size (16MB)
-const MAX_PAYLOAD_SIZE = 16 * 1024 * 1024;
+// libkernel libraries contain syscalls
+// syscalls are enforced to be called from these libraries
+//
+// libkernel_web.sprx is used by the browser in firmwares >= 6.00
+// libkernel.sprx for firmwares below
+//
+// libkernel_sys.sprx contains syscalls that aren't found in the others, such
+// as mount and nmount
+//
+// the BD-J app uses libkernel_sys.sprx for example
 
-// Validate payload before sending
-function validatePayload(payload) {
-    // Check payload size
-    if (!payload || payload.byteLength === 0) {
-        throw new Error("Empty payload");
-    }
-    
-    if (payload.byteLength > MAX_PAYLOAD_SIZE) {
-        throw new Error(`Payload too large: ${payload.byteLength} bytes (max: ${MAX_PAYLOAD_SIZE})`);
-    }
-    
-    // Basic integrity check - first few bytes should be valid instructions
-    const view = new DataView(payload);
-    const firstWord = view.getUint32(0, true);
-    
-    // Check for common valid instruction patterns
-    // This is a simplified check - in real implementation you would have more comprehensive validation
-    const validPatterns = [0x48, 0x89, 0xE5, 0x41]; // Common x86-64 prologue bytes
-    const firstByte = firstWord & 0xFF;
-    
-    if (!validPatterns.includes(firstByte)) {
-        log(`Warning: Payload first byte 0x${firstByte.toString(16)} is unusual`);
-        // Continue anyway, just log the warning
-    }
-    
-    return true;
+// Porting HOWTO:
+//
+// You can only dump the WebKit module (libSceNKWebKit.sprx for FW >= 6.00,
+// else libSceWebkit2.sprx) initially via dump_libwebkit() on any firmware.
+// We'll use the WebKit dump to search for imported functions from libkernel
+// and LibcInternal. Once we resolve the imports, we can use find_base() to get
+// the boundaries of these modules.
+//
+// Most of the work is done for you at dump_lib*(). You just need to find the
+// offset of the imported functions relative to WebKit's base address.
+//
+// import candidates:
+//
+// __stack_chk_fail() is a good import from libkernel to search for as it's
+// easy to find since most functions are protected by a stack canary.
+//
+// For a LibcInternal import we searched for strlen() but you can search for
+// any libc function such as memcpy().
+
+import * as config from './config.mjs';
+
+import { Int } from './module/int64.mjs';
+import { Addr, mem } from './module/mem.mjs';
+import { make_buffer, find_base, resolve_import } from './module/memtools.mjs';
+import { KB, MB } from './module/offset.mjs';
+
+import {
+    log,
+    align,
+    die,
+    send,
+} from './module/utils.mjs';
+
+import * as rw from './module/rw.mjs';
+import * as o from './module/offset.mjs';
+
+const origin = window.origin;
+const port = '8000';
+const url = `${origin}:${port}`;
+
+const textarea = document.createElement('textarea');
+// JSObject
+const js_textarea = mem.addrof(textarea);
+
+// boundaries of the .text + PT_SCE_RELRO portion of a module
+function get_boundaries(leak) {
+    const lib_base = find_base(leak, true, true);
+    const lib_end = find_base(leak, false, false);
+
+    return [lib_base, lib_end]
 }
 
-// Send payload to target address
-export async function sendPayload(targetAddress, payload) {
-    try {
-        log(`Preparing to send payload (${payload.byteLength} bytes) to address ${targetAddress}`);
-        
-        // Validate payload
-        validatePayload(payload);
-        
-        // Create a safe copy of the payload
-        const safeCopy = new Uint8Array(payload.byteLength);
-        const sourceView = new Uint8Array(payload);
-        safeCopy.set(sourceView);
-        
-        // Apply memory protection
-        const PROT_READ = 1;
-        const PROT_WRITE = 2;
-        const PROT_EXEC = 4;
-        
-        // Ensure target memory is properly protected
-        // This would be implemented with actual syscalls in a real exploit
-        log("Setting memory protection...");
-        
-        // Copy payload to target address
-        log("Copying payload to target address...");
-        
-        // Execute payload
-        log("Payload sent successfully");
-        
-        return true;
-    } catch (error) {
-        log(`Error sending payload: ${error.message}`);
-        return false;
-    }
+// dump a module's .text and PT_SCE_RELRO segments only
+function dump(name, lib_base, lib_end) {
+    // assumed size < 4GB
+    const lib_size = lib_end.sub(lib_base).lo;
+    log(`${name} base: ${lib_base}`);
+    log(`${name} size: ${lib_size}`);
+    const lib = make_buffer(
+        lib_base,
+        lib_size
+    );
+    send(
+        url,
+        lib,
+        `${name}.sprx.text_${lib_base}.bin`,
+        () => log(`${name} sent`)
+    );
 }
-
-// Load payload from URL
-export async function loadPayloadFromUrl(url) {
-    try {
-        log(`Loading payload from ${url}`);
-        
-        const response = await fetch(url);
-        if (!response.ok) {
-            throw new Error(`Failed to fetch payload: ${response.status} ${response.statusText}`);
-        }
-        
-        const payload = await response.arrayBuffer();
-        log(`Payload loaded: ${payload.byteLength} bytes`);
-        
-        return payload;
-    } catch (error) {
-        log(`Error loading payload: ${error.message}`);
-        throw error;
-    }
-}
-
-// Default export for module
-export default {
-    sendPayload,
-    loadPayloadFromUrl,
-    validatePayload
-};

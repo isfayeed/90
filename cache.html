@@ -38,11 +38,20 @@ body {
   font-size: 36px;
   margin-bottom: 20px;
   text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+  font-weight: bold;
 }
 .subtitle {
   font-size: 24px;
   margin-bottom: 30px;
   opacity: 0.9;
+}
+.pulse {
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
 }
 </style>
 <script>
@@ -51,12 +60,23 @@ function DLProgress(e){
   Percent = Math.round(e.loaded / e.total * 100);
   document.getElementById("progress-value").style.width = Percent + "%";
   msgs.innerHTML = "Installing Offline Cache: " + Percent + "%";
+  
+  if (Percent < 30) {
+    document.getElementById("status-message").innerHTML = "Downloading exploit files...";
+  } else if (Percent < 60) {
+    document.getElementById("status-message").innerHTML = "Preparing exploit components...";
+  } else if (Percent < 90) {
+    document.getElementById("status-message").innerHTML = "Finalizing installation...";
+  } else {
+    document.getElementById("status-message").innerHTML = "Almost done...";
+  }
 };
 function DisplayCacheProgress(){
   setTimeout(function(){
     msgs.innerHTML = "Cache Installed Successfully!";
     document.getElementById("progress-value").style.width = "100%";
     document.getElementById("progress-value").style.background = "linear-gradient(to right, #00b300, #00ff00)";
+    document.getElementById("status-message").innerHTML = "Redirecting to exploit page...";
   }, 1000);
   setTimeout(function(){
     location.reload();
@@ -65,31 +85,39 @@ function DisplayCacheProgress(){
 window.applicationCache.addEventListener("progress", DLProgress, false);
 window.applicationCache.oncached = function(e){DisplayCacheProgress();};
 window.applicationCache.onupdateready = function(e){DisplayCacheProgress();};
-
-// Add error handling for cache events
-window.applicationCache.onerror = function(e) {
-  msgs.innerHTML = "Cache Error! Please reload the page.";
-  document.getElementById("progress-value").style.width = "100%";
-  document.getElementById("progress-value").style.background = "linear-gradient(to right, #ff0000, #cc0000)";
-  console.error("Cache error:", e);
-};
-
-// Add timeout for cache loading
-setTimeout(function() {
-  if (parseInt(document.getElementById("progress-value").style.width) < 100) {
-    msgs.innerHTML = "Cache loading is taking longer than expected. Please be patient...";
-  }
-}, 10000);
 </script>
 </head>
 <body>
 <div class="container">
   <div class="title">PSFree-Lapse Exploit</div>
   <div class="subtitle">For PlayStation 4 9.00</div>
-  <div id="msgs">Preparing Cache...</div>
+  <div id="msgs" class="pulse">Preparing Cache...</div>
   <div class="progress-container">
     <div id="progress-value" class="progress-bar"></div>
   </div>
+  <div id="status-message" style="margin-top: 20px; font-size: 18px; opacity: 0.8;">Please wait while the exploit is being cached...</div>
+  <div style="margin-top: 40px; font-size: 16px;">
+    <span id="tip" style="opacity: 0.7;"></span>
+  </div>
 </div>
+
+<script>
+  // Display random tips during loading
+  const tips = [
+    "Keep your PS4 connected during the entire process",
+    "This exploit works on PS4 firmware 9.00 only",
+    "Make sure to close all applications before running the exploit",
+    "For best results, restart your PS4 before using this exploit",
+    "If the exploit fails, try again after restarting your browser"
+  ];
+  
+  function showRandomTip() {
+    const randomIndex = Math.floor(Math.random() * tips.length);
+    document.getElementById("tip").textContent = "Tip: " + tips[randomIndex];
+  }
+  
+  showRandomTip();
+  setInterval(showRandomTip, 5000);
+</script>
 </body>
 </html>

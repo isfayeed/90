@@ -1,6 +1,5 @@
 CACHE MANIFEST
-# PSFree-Lapse Exploit Cache v1.2
-# Last Updated: 2023-12-15
+# PSFree-Lapse Exploit Cache v1.0
 
 CACHE:
 index.html
@@ -11,7 +10,6 @@ lapse.mjs
 payload.js
 payload.bin
 psfree.mjs
-send.mjs
 
 # Module files
 module/chain.mjs
