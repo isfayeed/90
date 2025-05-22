@@ -65,6 +65,21 @@ function DisplayCacheProgress(){
 window.applicationCache.addEventListener("progress", DLProgress, false);
 window.applicationCache.oncached = function(e){DisplayCacheProgress();};
 window.applicationCache.onupdateready = function(e){DisplayCacheProgress();};
+
+// Add error handling for cache events
+window.applicationCache.onerror = function(e) {
+  msgs.innerHTML = "Cache Error! Please reload the page.";
+  document.getElementById("progress-value").style.width = "100%";
+  document.getElementById("progress-value").style.background = "linear-gradient(to right, #ff0000, #cc0000)";
+  console.error("Cache error:", e);
+};
+
+// Add timeout for cache loading
+setTimeout(function() {
+  if (parseInt(document.getElementById("progress-value").style.width) < 100) {
+    msgs.innerHTML = "Cache loading is taking longer than expected. Please be patient...";
+  }
+}, 10000);
 </script>
 </head>
 <body>

