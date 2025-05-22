@@ -1372,7 +1372,7 @@ function make_kernel_arw(pktopts_sds, dirty_sd, k100_addr, kernel_addr, sds) {
         }
 
         _verify_len(len) {
-            if (!(Number.isInteger(len) && (0 <= len <= 0xffffffff))) {
+            if (!(Number.isInteger(len) && (0 <= len && len <= 0xffffffff))) {
                 throw TypeError('len not a 32-bit unsigned integer');
             }
         }
@@ -1462,20 +1462,13 @@ function make_kernel_arw(pktopts_sds, dirty_sd, k100_addr, kernel_addr, sds) {
 
     // RESTORE: clean corrupt pointers
     // pktopts.ip6po_rthdr = NULL
-     const off_ip6po_rthdr = 0x68;
-     const r_rthdr_p = r_pktopts.add(off_ip6po_rthdr);
--    log(`reclaim rthdr: ${kmem.read64(r_rthdr_p)}`);
--    kmem.write64(r_rthdr_p, 0);
--    log(`reclaim rthdr: ${kmem.read64(r_rthdr_p)}`);
--
-     const w_rthdr_p = w_pktopts.add(off_ip6po_rthdr);
--    log(`reclaim rthdr: ${kmem.read64(w_rthdr_p)}`);
--    log(kmem.read64(w_rthdr_p));
--    log(`reclaim rthdr: ${kmem.read64(w_rthdr_p)}`);
--
-+    kmem.write64(r_rthdr_p, 0);
-+    kmem.write64(w_rthdr_p, 0);
-     log('corrupt pointers cleaned');
+    const off_ip6po_rthdr = 0x68;
+    const r_rthdr_p = r_pktopts.add(off_ip6po_rthdr);
+    kmem.write64(r_rthdr_p, 0);
+    
+    const w_rthdr_p = w_pktopts.add(off_ip6po_rthdr);
+    kmem.write64(w_rthdr_p, 0);
+    log('corrupt pointers cleaned');
     
 
     return [kbase, kmem, p_ucred, [kpipe, pipe_save, pktinfo_p, w_pktinfo]];
@@ -1498,7 +1491,7 @@ async function patch_kernel(kbase, kmem, p_ucred, restore_info) {
     if (!is_ps4) {
         throw RangeError('PS5 kernel patching unsupported');
     }
-    if (!(0x800 <= version < 0x900)) {
+    if (!(0x800 <= version && version < 0x900)) {
         throw RangeError('kernel patching unsupported');
     }
 
@@ -1523,7 +1516,7 @@ async function patch_kernel(kbase, kmem, p_ucred, restore_info) {
     const buf = await get_patches('./kpatch/900.elf');
     // FIXME handle .bss segment properly
     // assume start of loadable segments is at offset 0x1000
-    const patches = new View1(await buf, 0x1000);
+    const patches = new View1(buf, 0x1000);
     let map_size = patches.size;
     const max_size = 0x10000000;
     if (map_size > max_size) {
