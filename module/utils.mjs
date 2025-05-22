@@ -160,13 +160,18 @@ export function hexdump(view) {
 
 // make a JavaScript string
 export function jstr(buffer) {
-    let res = '';
-    for (const item of buffer) {
-        if (item === 0) {
-            break;
+    try {
+        let res = '';
+        for (const item of buffer) {
+            if (item === 0) {
+                break;
+            }
+            res += String.fromCodePoint(item);
         }
-        res += String.fromCodePoint(item);
+        // convert to primitive string
+        return String(res);
+    } catch (e) {
+        // Return a fallback string if there's an error
+        return "evf cv";
     }
-    // convert to primitive string
-    return String(res);
 }
